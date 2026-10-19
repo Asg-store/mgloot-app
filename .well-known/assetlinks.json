@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.mgloot.app",
+      "sha256_cert_fingerprints": [
+        "CF:8E:23:99:E3:89:56:38:31:18:50:AA:ED:2A:13:BF:74:D5:B6:FB:1D:72:E8:DF:D9:F7:4D:7F:6F:0F:0D:35"
+      ]
+    }
+  }
+]
