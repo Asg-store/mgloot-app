@@ -111,9 +111,12 @@ jobs:
               json.dump(data, f, indent=2)
               f.write("\n")
           PYJSON
-          # Premier build : pas de projet genere -> Bubblewrap demande de le regenerer.
-          # On repond "y" automatiquement (projet genere depuis twa-manifest.json).
-          printf 'y\ny\ny\ny\ny\n' | bubblewrap build --skipPwaValidation
+          # 'update' genere le projet Android depuis twa-manifest.json SANS aucune
+          # question (toutes les valeurs viennent du manifeste) et ecrit le checksum.
+          # Ensuite 'build' compile sans prompt. Les mots de passe viennent des
+          # variables BUBBLEWRAP_KEYSTORE_PASSWORD / BUBBLEWRAP_KEY_PASSWORD.
+          bubblewrap update --skipVersionUpgrade
+          bubblewrap build --skipPwaValidation
           echo "Build outputs:"
           find . -type f \( -name '*.apk' -o -name '*.aab' \) -print
 
