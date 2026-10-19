@@ -1,0 +1,193 @@
+name: Build MgLoot Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'twa-manifest.json'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mgloot-android-build
+  cancel-in-progress: false
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check required TWA manifest
+        run: |
+          if [ ! -f twa-manifest.json ]; then
+            echo "ERROR: twa-manifest.json is missing from the repository root."
+            echo "Create/configure the Bubblewrap TWA project first, then commit twa-manifest.json."
+            exit 1
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Bubblewrap CLI
+        run: npm install --global @bubblewrap/cli
+
+      - name: Configure Bubblewrap paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+            echo "ERROR: Android SDK path is unavailable."
+            exit 1
+          fi
+          mkdir -p "$HOME/.bubblewrap"
+          printf '{"jdkPath":"%s","androidSdkPath":"%s"}\n' "$JAVA_HOME" "$SDK" > "$HOME/.bubblewrap/config.json"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          cat "$HOME/.bubblewrap/config.json"
+
+      - name: Validate signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STOREPASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEYPASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$STOREPASS" ] || [ -z "$KEYPASS" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "ERROR: Configure all GitHub Actions secrets before building:"
+            echo "ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_PASSWORD, ANDROID_KEY_ALIAS."
+            echo "Do not generate a new signing key automatically for each build."
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/mgloot.keystore"
+          if [ ! -s "$RUNNER_TEMP/mgloot.keystore" ]; then
+            echo "ERROR: Decoded keystore is empty or invalid."
+            exit 1
+          fi
+          keytool -list -keystore "$RUNNER_TEMP/mgloot.keystore" -alias "$KEY_ALIAS" -storepass "$STOREPASS" >/dev/null
+          echo "Keystore and alias validated."
+
+      - name: Build signed APK and AAB with Bubblewrap
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          BUBBLEWRAP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Point Bubblewrap's manifest at the stable keystore supplied via GitHub Secrets.
+          python3 - <<'PYJSON'
+          import json, os
+          path = "twa-manifest.json"
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+          signing = data.setdefault("signingKey", {})
+          signing["path"] = os.path.join(os.environ["RUNNER_TEMP"], "mgloot.keystore")
+          signing["alias"] = os.environ["ANDROID_KEY_ALIAS"]
+          with open(path, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2)
+              f.write("\n")
+          PYJSON
+          bubblewrap build --skipPwaValidation
+          echo "Build outputs:"
+          find . -type f \( -name '*.apk' -o -name '*.aab' \) -print
+
+      - name: Collect build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find . -type f -name '*.apk' ! -path './.git/*' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK was produced. Review the Bubblewrap build logs."
+            exit 1
+          fi
+          cp "$APK" MgLoot.apk
+          AAB="$(find . -type f -name '*.aab' ! -path './.git/*' | head -n 1)"
+          if [ -n "$AAB" ]; then
+            cp "$AAB" MgLoot.aab
+          fi
+          ls -lh MgLoot.apk ${AAB:+MgLoot.aab}
+
+      - name: Verify APK signature and generate assetlinks.json
+        env:
+          STOREPASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "ERROR: apksigner was not found in Android build-tools."
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose MgLoot.apk
+          FP="$(keytool -list -v -keystore "$RUNNER_TEMP/mgloot.keystore" -alias "$KEY_ALIAS" -storepass "$STOREPASS" 2>/dev/null | awk -F': ' '/SHA256:/{print $2; exit}' | tr -d ' ')"
+          if [ -z "$FP" ]; then
+            echo "ERROR: Could not read SHA-256 certificate fingerprint."
+            exit 1
+          fi
+          mkdir -p dist-wellknown
+          cat > dist-wellknown/assetlinks.json <<JSON
+          [
+            {
+              "relation": ["delegate_permission/common.handle_all_urls"],
+              "target": {
+                "namespace": "android_app",
+                "package_name": "com.mgloot.app",
+                "sha256_cert_fingerprints": ["$FP"]
+              }
+            }
+          ]
+          JSON
+          python3 -m json.tool dist-wellknown/assetlinks.json >/dev/null
+          echo "Generated assetlinks.json for package com.mgloot.app."
+          cat dist-wellknown/assetlinks.json
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MgLoot-Android-${{ github.run_number }}
+          path: |
+            MgLoot.apk
+            MgLoot.aab
+            dist-wellknown/assetlinks.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: MgLoot Android - Latest build
+          body: |
+            Automated MgLoot Android build.
+
+            - `MgLoot.apk`: APK for direct installation.
+            - `MgLoot.aab`: Android App Bundle, if generated.
+            - `assetlinks.json`: deploy to `https://YOUR_DOMAIN/.well-known/assetlinks.json`.
+
+            Verify the package name and signing certificate before deployment.
+          files: |
+            MgLoot.apk
+            MgLoot.aab
+            dist-wellknown/assetlinks.json
+          fail_on_unmatched_files: false
+          make_latest: true
