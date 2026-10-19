@@ -124,13 +124,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK="$(find . -type f -name '*.apk' ! -path './.git/*' | head -n 1)"
+          # Prefere l'APK SIGNE produit par Bubblewrap, pas un APK intermediaire non signe.
+          APK="$(find . -type f -name 'app-release-signed.apk' ! -path './.git/*' | head -n 1)"
+          [ -z "$APK" ] && APK="$(find . -type f -name '*-signed.apk' ! -path './.git/*' | head -n 1)"
+          [ -z "$APK" ] && APK="$(find . -type f -name '*.apk' ! -iname '*unsigned*' ! -path './.git/*' | head -n 1)"
           if [ -z "$APK" ]; then
-            echo "ERROR: No APK was produced. Review the Bubblewrap build logs."
+            echo "ERROR: No signed APK was produced. Review the Bubblewrap build logs."
             exit 1
           fi
+          echo "APK choisi : $APK"
           cp "$APK" MgLoot.apk
-          AAB="$(find . -type f -name '*.aab' ! -path './.git/*' | head -n 1)"
+          AAB="$(find . -type f -name 'app-release-bundle.aab' ! -path './.git/*' | head -n 1)"
+          [ -z "$AAB" ] && AAB="$(find . -type f -name '*.aab' ! -path './.git/*' | head -n 1)"
           if [ -n "$AAB" ]; then
             cp "$AAB" MgLoot.aab
           fi
