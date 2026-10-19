@@ -111,7 +111,9 @@ jobs:
               json.dump(data, f, indent=2)
               f.write("\n")
           PYJSON
-          bubblewrap build --skipPwaValidation
+          # Premier build : pas de projet genere -> Bubblewrap demande de le regenerer.
+          # On repond "y" automatiquement (projet genere depuis twa-manifest.json).
+          printf 'y\ny\ny\ny\ny\n' | bubblewrap build --skipPwaValidation
           echo "Build outputs:"
           find . -type f \( -name '*.apk' -o -name '*.aab' \) -print
 
