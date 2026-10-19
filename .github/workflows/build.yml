@@ -1,0 +1,65 @@
+name: 📱 Build MgLoot (Capacitor)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Installer les dépendances
+        run: npm install
+
+      - name: Accepter les licences Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+
+      - name: Générer le projet Android (Capacitor)
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Construire l'APK (debug)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Renommer l'APK
+        run: |
+          APK=$(find android -name "app-debug.apk" | head -1)
+          echo "APK trouvé : $APK"
+          cp "$APK" MgLoot.apk
+          ls -la MgLoot.apk
+
+      - name: Publier l'APK (Releases)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-latest
+          name: 📱 MgLoot — Application (Capacitor)
+          body: |
+            Application MgLoot (version de test — debug).
+            Désinstalle d'abord l'ancienne app TWA avant d'installer.
+          files: MgLoot.apk
+
+      - name: Sauvegarder aussi comme artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MgLoot-APK
+          path: MgLoot.apk
